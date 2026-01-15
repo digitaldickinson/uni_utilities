@@ -733,6 +733,65 @@
         templateBaseFiles = files;
     }
 
+    function buildTextNodeIndex(textNodes) {
+        const map = [];
+        let fullText = '';
+        textNodes.forEach((node, nodeIndex) => {
+            const text = node.textContent || '';
+            for (let offset = 0; offset < text.length; offset++) {
+                map.push({ nodeIndex, offset });
+            }
+            fullText += text;
+        });
+        return { fullText, map };
+    }
+
+    function replacePlaceholderInTextNodes(textNodes, placeholder, value) {
+        let found = true;
+        while (found) {
+            const { fullText, map } = buildTextNodeIndex(textNodes);
+            const matchIndex = fullText.indexOf(placeholder);
+            if (matchIndex === -1) {
+                found = false;
+                break;
+            }
+
+            const startInfo = map[matchIndex];
+            const endInfo = map[matchIndex + placeholder.length - 1];
+            if (!startInfo || !endInfo) {
+                found = false;
+                break;
+            }
+
+            const startNode = textNodes[startInfo.nodeIndex];
+            const endNode = textNodes[endInfo.nodeIndex];
+            const startText = startNode.textContent || '';
+            const endText = endNode.textContent || '';
+            const before = startText.slice(0, startInfo.offset);
+            const after = endText.slice(endInfo.offset + 1);
+
+            startNode.textContent = before + value + after;
+
+            for (let i = startInfo.nodeIndex + 1; i <= endInfo.nodeIndex; i++) {
+                textNodes[i].textContent = '';
+            }
+        }
+    }
+
+    function replacePlaceholdersInDocumentXml(xml, rowData) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(xml, 'application/xml');
+        const textNodes = Array.from(doc.getElementsByTagName('w:t'));
+
+        Object.keys(rowData).forEach(key => {
+            const placeholder = '{{' + key + '}}';
+            const value = safeText(rowData[key]);
+            replacePlaceholderInTextNodes(textNodes, placeholder, value);
+        });
+
+        return new XMLSerializer().serializeToString(doc);
+    }
+
     // Build a new .docx from cached base files, replacing placeholders in word/document.xml
     function createDocumentBlobFromTemplate(rowData) {
         const zip = new JSZip();
@@ -746,13 +805,7 @@
             }
 
             if (path === 'word/document.xml' && entry.isText) {
-                let xml = entry.content;
-                Object.keys(rowData).forEach(key => {
-                    const placeholder = '{{' + key + '}}';
-                    const value = safeText(rowData[key]);
-                    const escapedPlaceholder = placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                    xml = xml.replace(new RegExp(escapedPlaceholder, 'g'), value);
-                });
+                const xml = replacePlaceholdersInDocumentXml(entry.content, rowData);
                 zip.file(path, xml);
             } else {
                 zip.file(path, entry.content);
